@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="th" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>เปิดดูไฟล์ข้อมูล</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/site.css">
+  <script src="assets/site.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+</head>
+<body>
+  <nav class="topnav" aria-label="เมนูหลัก">
+    <div class="wrap">
+      <a class="brand" href="index.html"><span class="shield">ทล.</span> อุบัติเหตุทางหลวง 2562</a>
+      <div class="nav-links">
+        <a href="index.html">หน้าแรก</a>
+        <a href="web/plotly/index.html">Dashboard</a>
+        <a href="viewer.html?file=docs/process_report.md">รายงาน</a>
+        <a class="btn-gh" data-github href="#">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <main class="wrap">
+    <div class="viewer-head">
+      <div>
+        <h1 id="title">กำลังโหลด…</h1>
+        <div class="meta" id="meta"></div>
+      </div>
+      <div class="toolbar" style="margin:0">
+        <a class="btn btn-line" href="index.html#files">← กลับหน้าแรก</a>
+        <a class="btn btn-dark" id="download" href="#" download>ดาวน์โหลดไฟล์</a>
+      </div>
+    </div>
+    <div id="content"></div>
+  </main>
+
+  <footer class="wrap foot">
+    <p><a href="index.html">← กลับหน้าแรก</a> · <a href="web/plotly/index.html">Dashboard</a> · <a data-github href="#">GitHub Repository</a></p>
+  </footer>
+
+<script>
+(() => {
+  "use strict";
+  // อนุญาตเฉพาะไฟล์ในโปรเจกต์นี้
+  const ALLOWED = {
+    "data/raw/accident2019raw.csv": "ข้อมูลดิบ (CSV)",
+    "data/cleaned/accident2019_cleaned.csv": "ข้อมูลที่ทำความสะอาดแล้ว (CSV)",
+    "scripts/prepare_web_data.py": "สคริปต์เตรียมข้อมูล (Python)",
+    "README.md": "README",
+    "docs/process_report.md": "รายงานกระบวนการทำงาน (Process Report)",
+    "web/plotly/app.js": "โค้ด Dashboard (app.js)",
+    "web/plotly/style.css": "โค้ด Dashboard (style.css)",
+  };
+  const PAGE = 50;
+  const $ = (id) => document.getElementById(id);
+  const file = new URLSearchParams(location.search).get("file") || "";
+  const content = $("content");
+
+  if (!ALLOWED[file]) {
+    $("title").textContent = "ไม่พบไฟล์";
+    content.innerHTML = '<p class="notice">ไม่พบไฟล์ที่ต้องการ <a href="index.html#files">กลับไปเลือกไฟล์ที่หน้าแรก</a></p>';
+    $("download").hidden = true;
+    return;
+  }
+  $("title").textContent = ALLOWED[file];
+  document.title = ALLOWED[file] + " · อุบัติเหตุทางหลวง 2562";
+  $("download").href = file;
+  $("meta").textContent = file;
+
+  // ตัวอ่าน CSV (รองรับข้อความในเครื่องหมายคำพูดที่มี , หรือขึ้นบรรทัดใหม่)
+  function parseCSV(text) {
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+    const rows = []; let row = [], cell = "", q = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) {
+        if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+        else cell += c;
+      } else if (c === '"') q = true;
+      else if (c === ",") { row.push(cell); cell = ""; }
+      else if (c === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; }
+      else if (c !== "\r") cell += c;
+    }
+    if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
+    return rows;
+  }
+
+  function showCSV(text) {
+    const all = parseCSV(text);
+    const header = all[0], body = all.slice(1).filter((r) => r.length > 1);
+    let rows = body, page = 0;
+    const missing = body.reduce((a, r) => a + r.filter((v) => v === "").length, 0);
+    $("meta").textContent = `${file} · ${body.length.toLocaleString("th-TH")} แถว × ${header.length} คอลัมน์ · ค่าว่าง ${missing.toLocaleString("th-TH")} ค่า · UTF-8`;
+    content.innerHTML = `
+      <div class="toolbar">
+        <input id="q" type="search" placeholder="ค้นหาในข้อมูล เช่น เชียงใหม่, รถจักรยานยนต์, ฝนตก" aria-label="ค้นหา">
+        <div class="pager"><button id="prev" type="button">‹ ก่อนหน้า</button><span id="info"></span><button id="next" type="button">ถัดไป ›</button></div>
+      </div>
+      <div class="data-wrap"><table class="data"><thead></thead><tbody></tbody></table></div>`;
+    const thead = content.querySelector("thead"), tbody = content.querySelector("tbody");
+    const tr = document.createElement("tr");
+    const th0 = document.createElement("th"); th0.className = "idx"; th0.textContent = "#"; tr.append(th0);
+    header.forEach((h) => { const th = document.createElement("th"); th.textContent = h; tr.append(th); });
+    thead.append(tr);
+    function draw() {
+      const pages = Math.max(1, Math.ceil(rows.length / PAGE));
+      page = Math.min(page, pages - 1);
+      tbody.innerHTML = "";
+      const frag = document.createDocumentFragment();
+      rows.slice(page * PAGE, page * PAGE + PAGE).forEach((r) => {
+        const tr = document.createElement("tr");
+        const td0 = document.createElement("td"); td0.className = "idx"; td0.textContent = (body.indexOf(r) + 1).toLocaleString("th-TH"); tr.append(td0);
+        header.forEach((_, i) => {
+          const td = document.createElement("td");
+          const v = r[i] ?? "";
+          td.textContent = v;
+          if (v === "") { td.textContent = "(ว่าง)"; td.style.color = "#d03b3b"; }
+          tr.append(td);
+        });
+        frag.append(tr);
+      });
+      tbody.append(frag);
+      $("info").textContent = `หน้า ${page + 1}/${pages} · ${rows.length.toLocaleString("th-TH")} แถว`;
+      $("prev").disabled = page === 0; $("next").disabled = page >= pages - 1;
+    }
+    $("prev").onclick = () => { page--; draw(); };
+    $("next").onclick = () => { page++; draw(); };
+    let t;
+    $("q").addEventListener("input", (e) => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        const s = e.target.value.trim();
+        rows = s ? body.filter((r) => r.some((v) => v.includes(s))) : body;
+        page = 0; draw();
+      }, 200);
+    });
+    draw();
+  }
+
+  function showText(text) {
+    $("meta").textContent = `${file} · ${text.split("\n").length.toLocaleString("th-TH")} บรรทัด`;
+    if (file.endsWith(".md") && window.marked) {
+      const div = document.createElement("div"); div.className = "md";
+      div.innerHTML = marked.parse(text);
+      div.querySelectorAll("a").forEach((a) => { if (/^https?:/.test(a.getAttribute("href") || "")) { a.target = "_blank"; a.rel = "noopener"; } });
+      content.append(div);
+    } else {
+      const pre = document.createElement("pre"); pre.className = "code"; pre.textContent = text;
+      content.append(pre);
+    }
+  }
+
+  content.innerHTML = '<p class="meta">กำลังโหลดไฟล์…</p>';
+  fetch(file)
+    .then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); })
+    .then((text) => { content.innerHTML = ""; file.endsWith(".csv") ? showCSV(text) : showText(text); })
+    .catch(() => {
+      content.innerHTML = `<p class="notice">เปิดดูไฟล์บนหน้าเว็บไม่ได้ ถ้าเปิดไฟล์ตรงจากเครื่อง (file://) เบราว์เซอร์จะไม่อนุญาตให้อ่านไฟล์
+        — เปิดผ่านลิงก์ GitHub Pages แทน หรือกด <a href="${file}" download>ดาวน์โหลดไฟล์</a></p>`;
+    });
+})();
+</script>
+</body>
+</html>
